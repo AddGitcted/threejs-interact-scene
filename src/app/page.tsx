@@ -1,103 +1,145 @@
-import Image from "next/image";
+"use client";
+
+import React, { useEffect, useRef, useState } from 'react';
+import * as THREE from 'three';
+import {
+  initializeScene,
+  disposeScene,
+  loadModel,
+  initializeInteraction,
+  updateInteractions,
+  cleanupInteraction,
+  setupVisualEffects,
+  updateVisualEffects
+} from '../components/three';
 
 export default function Home() {
-  return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm/6 text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-[family-name:var(--font-geist-mono)] font-semibold">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+  const mountRef = useRef<HTMLDivElement>(null);
+  const [highlightEnabled, setHighlightEnabled] = useState(false);
+  const [staticObjectsEnabled, setStaticObjectsEnabled] = useState(true);
+  
+  // Références pour garder les objets entre les rendus
+  const sceneRef = useRef<any>(null);
+  const modelRef = useRef<THREE.Group | null>(null);
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
+  // Effet principal pour l'initialisation de la scène
+  useEffect(() => {
+    if (!mountRef.current) return;
+
+    let interactionState: any;
+    let effectsContext: any;
+    let animationFrameId: number;
+
+    const initialize = async () => {
+      if (!mountRef.current) return;
+      
+      // Initialiser la scène
+      sceneRef.current = initializeScene(mountRef.current);
+      
+      // Configurer les effets visuels
+      effectsContext = setupVisualEffects(sceneRef.current, {
+        outlineEnabled: highlightEnabled,
+        outlineColor: '#ffffff',
+        outlineStrength: 3,
+        outlineGlow: 0.5
+      });
+      
+      // Configurer l'interaction
+      interactionState = initializeInteraction(sceneRef.current);
+      
+      // Charger le modèle 3D
+      const modelData = await loadModel('/scene.glb', sceneRef.current, {
+        positions: interactionState.originalPositions,
+        rotations: interactionState.originalRotations,
+        velocities: interactionState.objectVelocities
+      });
+      
+      // Stocker le modèle dans la référence
+      modelRef.current = modelData.model;
+      
+      // Appliquer les états statiques
+      applyStaticObjectsState(modelData.model, staticObjectsEnabled);
+      
+      // Boucle d'animation
+      const animate = () => {
+        updateInteractions(sceneRef.current, interactionState);
+        updateVisualEffects(effectsContext, interactionState.highlightObjects, highlightEnabled);
+        sceneRef.current.composer.render();
+        animationFrameId = requestAnimationFrame(animate);
+      };
+      
+      animate();
+    };
+    
+    initialize().catch(console.error);
+    
+    // Nettoyage
+    return () => {
+      if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+      }
+      
+      if (sceneRef.current) {
+        cleanupInteraction(sceneRef.current);
+        disposeScene(sceneRef.current);
+        sceneRef.current = null;
+        modelRef.current = null;
+      }
+    };
+  }, [highlightEnabled]);
+  
+  // Effet pour mettre à jour les objets statiques
+  useEffect(() => {
+    if (modelRef.current) {
+      applyStaticObjectsState(modelRef.current, staticObjectsEnabled);
+    }
+  }, [staticObjectsEnabled]);
+
+  // Fonction pour identifier et marquer les objets statiques
+  const applyStaticObjectsState = (model: THREE.Group, isStatic: boolean) => {
+    model.traverse((node) => {
+      if (node instanceof THREE.Mesh) {
+        const isFloor = 
+          node.name.toLowerCase().includes('floor')
+           ||
+          // node.name.toLowerCase().includes('ground') || 
+          // node.name.toLowerCase().includes('sol') ||
+          // node.name.toLowerCase().includes('plane') 
+          node.name.toLowerCase().includes('wall') 
+          // node.position.y <= 0.1; // Position basse
+          
+        if (isFloor) {
+          node.userData.isStatic = isStatic;
+          console.log(`Objet ${node.name || 'sans nom'} défini comme ${isStatic ? 'statique' : 'dynamique'}`);
+        }
+      }
+    });
+  };
+
+  return (
+    <main>
+      <div className="fixed top-4 left-4 z-10 bg-black bg-opacity-50 text-white p-4 rounded">
+        <div className="flex flex-col space-y-3">
+          <label className="flex items-center space-x-2">
+            <input
+              type="checkbox"
+              checked={highlightEnabled}
+              onChange={(e) => setHighlightEnabled(e.target.checked)}
             />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+            <span>Afficher le contour</span>
+          </label>
+          
+          <label className="flex items-center space-x-2">
+            <input
+              type="checkbox"
+              checked={staticObjectsEnabled}
+              onChange={(e) => setStaticObjectsEnabled(e.target.checked)}
+            />
+            <span>Sol statique (sans effet)</span>
+          </label>
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
-    </div>
+      </div>
+      <div ref={mountRef} style={{ width: '100vw', height: '100vh' }} />
+    </main>
   );
 }
