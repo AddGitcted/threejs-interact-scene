@@ -13,6 +13,8 @@ export interface InteractionState {
   impulseStrength: number;
   springStrength: number;
   damping: number;
+  lastBounceTime: Map<string, number>;
+  bounceCooldown: number;
 }
 
 export function initializeInteraction(context: SceneContext): InteractionState {
@@ -28,6 +30,8 @@ export function initializeInteraction(context: SceneContext): InteractionState {
     impulseStrength: 1,
     springStrength: 50.0, // Elastic return force
     damping: 0.95,
+    lastBounceTime: new Map<string, number>(),
+    bounceCooldown: 500
   };
 
   context.container.addEventListener("mousemove", (event) => {
@@ -92,6 +96,15 @@ function applyBounceEffect(
     // Do not apply the bump effect to static objects
     return;
   }
+  const currentTime = Date.now();
+  const objectId = state.selectedObject.uuid;
+  const lastBounceTime = state.lastBounceTime.get(objectId) || 0;
+
+  if (currentTime - lastBounceTime < state.bounceCooldown) {
+    return;
+  }
+
+  state.lastBounceTime.set(objectId, currentTime);
 
   const intersectionPoint = intersection.point;
 
