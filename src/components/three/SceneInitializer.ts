@@ -38,7 +38,17 @@ export function initializeScene(container: HTMLDivElement): SceneContext {
     0.1,
     1000
   );
-  camera.position.set(0, 1, 5);
+  
+  camera.position.set(23.6, 2.98, -22.7);
+  
+  camera.rotation.order = 'XYZ';
+  
+  const degToRad = Math.PI / 180;
+  camera.rotation.set(
+    81 * degToRad,  // X: 81°
+    -2.3 * degToRad, // Y: -2.3°
+    144 * degToRad   // Z: 144°
+  );
 
   const renderer = new THREE.WebGLRenderer({
     antialias: true,

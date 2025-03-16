@@ -7,6 +7,9 @@ export interface ModelData {
   originalPositions: Map<string, THREE.Vector3>;
   originalRotations: Map<string, THREE.Euler>;
   model: THREE.Group;
+  mixer?: THREE.AnimationMixer;
+  animations?: THREE.AnimationClip[];
+  actions?: Map<string, THREE.AnimationAction>;
 }
 
 export async function loadModel(
@@ -32,6 +35,15 @@ export async function loadModel(
       (gltf) => {
         const model = gltf.scene;
         
+        const mixer = new THREE.AnimationMixer(model);
+        const animations = gltf.animations || [];
+        const actions = new Map<string, THREE.AnimationAction>();
+        
+        animations.forEach((clip) => {
+          const action = mixer.clipAction(clip);
+          actions.set(clip.name, action);
+        });
+        
         identifyStaticObjects(model);
         
         optimizeModel(
@@ -48,7 +60,10 @@ export async function loadModel(
         resolve({
           originalPositions: storageMap.positions,
           originalRotations: storageMap.rotations,
-          model
+          model,
+          mixer,
+          animations,
+          actions
         });
       },
       (xhr) => {
@@ -66,13 +81,7 @@ function identifyStaticObjects(model: THREE.Group): void {
   model.traverse((node) => {
     const isStatic = 
       node.name.toLowerCase().includes('floor') || 
-      node.name.toLowerCase().includes('wall')
-      // node.name.toLowerCase().includes('ground') || 
-      // node.name.toLowerCase().includes('sol') ||
-      // node.name.toLowerCase().includes('plane') ||
-      
-      // (node instanceof THREE.Mesh && node.position.y < 0.1 && 
-      //  node.geometry.boundingBox?.max.y - node.geometry.boundingBox?.min.y < 0.5);
+      node.name.toLowerCase().includes('wall');
       
     if (isStatic && node instanceof THREE.Mesh) {
       node.userData.isStatic = true;

@@ -10,19 +10,31 @@ import {
   updateInteractions,
   cleanupInteraction,
   setupVisualEffects,
-  updateVisualEffects
+  updateVisualEffects,
+  initializeAnimations,
+  playAnimation,
+  stopAnimation,
+  pauseAnimation,
+  resumeAnimation,
+  updateAnimations,
+  listAnimations,
 } from '../components/three';
+import CameraControls from '../components/three/CameraControls';
 
 export default function Home() {
   const mountRef = useRef<HTMLDivElement>(null);
   const [highlightEnabled, setHighlightEnabled] = useState(false);
   const [staticObjectsEnabled, setStaticObjectsEnabled] = useState(true);
   
-  // Références pour garder les objets entre les rendus
-  const sceneRef = useRef<any>(null);
+  const [availableAnimations, setAvailableAnimations] = useState<string[]>([]);
+  const [currentAnimation, setCurrentAnimation] = useState<string>("");
+  const [isPlaying, setIsPlaying] = useState(false);
+  
+  const sceneRef = useRef<any>(null); 
   const modelRef = useRef<THREE.Group | null>(null);
+  const animationContextRef = useRef<any>(null);
+  const [bgColor, setBgColor] = useState("#6b6b6b");
 
-  // Effet principal pour l'initialisation de la scène
   useEffect(() => {
     if (!mountRef.current) return;
 
@@ -33,10 +45,9 @@ export default function Home() {
     const initialize = async () => {
       if (!mountRef.current) return;
       
-      // Initialiser la scène
       sceneRef.current = initializeScene(mountRef.current);
-      
-      // Configurer les effets visuels
+      sceneRef.current.scene.background = new THREE.Color(bgColor);
+
       effectsContext = setupVisualEffects(sceneRef.current, {
         outlineEnabled: highlightEnabled,
         outlineColor: '#ffffff',
@@ -44,26 +55,44 @@ export default function Home() {
         outlineGlow: 0.5
       });
       
-      // Configurer l'interaction
       interactionState = initializeInteraction(sceneRef.current);
       
-      // Charger le modèle 3D
-      const modelData = await loadModel('/scene.glb', sceneRef.current, {
+      const modelData = await loadModel('/fantasy_Low_poly_scene_.glb', sceneRef.current, {
         positions: interactionState.originalPositions,
         rotations: interactionState.originalRotations,
         velocities: interactionState.objectVelocities
       });
       
-      // Stocker le modèle dans la référence
       modelRef.current = modelData.model;
       
-      // Appliquer les états statiques
+      if (modelData.mixer && modelData.actions) {
+        animationContextRef.current = initializeAnimations(
+          modelData.mixer,
+          modelData.actions
+        );
+        
+        const animations = listAnimations(animationContextRef.current);
+        setAvailableAnimations(animations);
+        
+        if (animations.length > 0) {
+          setCurrentAnimation(animations[0]);
+          console.log("Animations disponibles:", animations);
+        }
+      }
+      
       applyStaticObjectsState(modelData.model, staticObjectsEnabled);
       
-      // Boucle d'animation
       const animate = () => {
+        const deltaTime = sceneRef.current.clock.getDelta();
+        
         updateInteractions(sceneRef.current, interactionState);
+        
         updateVisualEffects(effectsContext, interactionState.highlightObjects, highlightEnabled);
+        
+        if (animationContextRef.current) {
+          updateAnimations(animationContextRef.current, deltaTime);
+        }
+        
         sceneRef.current.composer.render();
         animationFrameId = requestAnimationFrame(animate);
       };
@@ -73,7 +102,6 @@ export default function Home() {
     
     initialize().catch(console.error);
     
-    // Nettoyage
     return () => {
       if (animationFrameId) {
         cancelAnimationFrame(animationFrameId);
@@ -84,29 +112,51 @@ export default function Home() {
         disposeScene(sceneRef.current);
         sceneRef.current = null;
         modelRef.current = null;
+        animationContextRef.current = null;
       }
     };
   }, [highlightEnabled]);
   
-  // Effet pour mettre à jour les objets statiques
   useEffect(() => {
     if (modelRef.current) {
       applyStaticObjectsState(modelRef.current, staticObjectsEnabled);
     }
   }, [staticObjectsEnabled]);
+  
+  const handlePlayAnimation = () => {
+    if (animationContextRef.current && currentAnimation) {
+      playAnimation(animationContextRef.current, currentAnimation);
+      setIsPlaying(true);
+    }
+  };
+  
+  const handlePauseAnimation = () => {
+    if (animationContextRef.current) {
+      pauseAnimation(animationContextRef.current);
+      setIsPlaying(false);
+    }
+  };
+  
+  const handleResumeAnimation = () => {
+    if (animationContextRef.current) {
+      resumeAnimation(animationContextRef.current);
+      setIsPlaying(true);
+    }
+  };
+  
+  const handleStopAnimation = () => {
+    if (animationContextRef.current) {
+      stopAnimation(animationContextRef.current);
+      setIsPlaying(false);
+    }
+  };
 
-  // Fonction pour identifier et marquer les objets statiques
   const applyStaticObjectsState = (model: THREE.Group, isStatic: boolean) => {
     model.traverse((node) => {
       if (node instanceof THREE.Mesh) {
         const isFloor = 
-          node.name.toLowerCase().includes('floor')
-           ||
-          // node.name.toLowerCase().includes('ground') || 
-          // node.name.toLowerCase().includes('sol') ||
-          // node.name.toLowerCase().includes('plane') 
-          node.name.toLowerCase().includes('wall') 
-          // node.position.y <= 0.1; // Position basse
+          node.name.toLowerCase().includes('floor') || 
+          node.name.toLowerCase().includes('wall');
           
         if (isFloor) {
           node.userData.isStatic = isStatic;
@@ -137,8 +187,64 @@ export default function Home() {
             />
             <span>Sol statique (sans effet)</span>
           </label>
+          
+          {/* Contrôles d'animation */}
+          {availableAnimations.length > 0 && (
+            <div className="mt-4">
+              <h3 className="font-bold mb-2">Animations</h3>
+              
+              <div className="mb-2">
+                <label htmlFor="animation-select" className="mr-2">Animation:</label>
+                <select
+                  id="animation-select"
+                  value={currentAnimation}
+                  onChange={(e) => setCurrentAnimation(e.target.value)}
+                  className="bg-gray-700 text-white p-1 rounded w-full"
+                >
+                  {availableAnimations.map((anim) => (
+                    <option key={anim} value={anim}>
+                      {anim}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              
+              <div className="flex space-x-2">
+                <button
+                  onClick={handlePlayAnimation}
+                  className="bg-blue-500 hover:bg-blue-600 px-2 py-1 rounded"
+                >
+                  Play
+                </button>
+                {isPlaying ? (
+                  <button
+                    onClick={handlePauseAnimation}
+                    className="bg-yellow-500 hover:bg-yellow-600 px-2 py-1 rounded"
+                  >
+                    Pause
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleResumeAnimation}
+                    className="bg-green-500 hover:bg-green-600 px-2 py-1 rounded"
+                  >
+                    Resume
+                  </button>
+                )}
+                <button
+                  onClick={handleStopAnimation}
+                  className="bg-red-500 hover:bg-red-600 px-2 py-1 rounded"
+                >
+                  Stop
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
+      
+      <CameraControls sceneRef={sceneRef} />
+      
       <div ref={mountRef} style={{ width: '100vw', height: '100vh' }} />
     </main>
   );
