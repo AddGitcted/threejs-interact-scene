@@ -15,126 +15,108 @@ export default function GridComponent({ config = GridConfig }: GridComponentProp
   const raycaster = useRef<THREE.Raycaster>(new THREE.Raycaster());
   const sceneContextRef = useRef<SceneContext | null>(null);
   const gridPlaneRef = useRef<THREE.Mesh | null>(null);
-  
+
   useEffect(() => {
     if (!containerRef.current) return;
-    
+
     const currentConfig = config;
     
     const sceneContext = initializeScene(containerRef.current);
     sceneContextRef.current = sceneContext;
     const { scene, camera, renderer, composer, clock } = sceneContext;
-    
+
     scene.background = new THREE.Color(currentConfig.grid.baseColor);
-    
+
     const { position, lookAt } = currentConfig.camera;
     camera.position.set(position.x, position.y, position.z);
     camera.lookAt(new THREE.Vector3(lookAt.x, lookAt.y, lookAt.z));
-    
-    const axesHelper = new THREE.AxesHelper(5);
-    scene.add(axesHelper);
-    
-    console.log("Creating grid plane");
-    const gridPlane = createGridPlane();
-    console.log("Grid plane created:", gridPlane);
+
+    const gridPlane = createGridPlane(currentConfig, camera);
     gridPlaneRef.current = gridPlane;
     scene.add(gridPlane);
-    
-    const cleanupMouseEvents = setupMouseEvents();
-    
+
+    const cleanupMouseEvents = setupMouseEvents(containerRef.current, gridPlane);
+
     const animate = () => {
       const elapsedTime = clock.getElapsedTime();
-      
-      if (gridPlane.material instanceof THREE.ShaderMaterial) {
-        gridPlane.material.uniforms.uTime.value = elapsedTime;
-      }
-      
+      updateGridMaterial(gridPlane, elapsedTime, camera);
       composer.render();
       requestAnimationFrame(animate);
     };
-    
+
     animate();
-    
-    console.log("Camera position:", camera.position);
 
     return () => {
-      if (cleanupMouseEvents) cleanupMouseEvents();
-      
+      cleanupMouseEvents();
       if (containerRef.current && renderer.domElement) {
         containerRef.current.removeChild(renderer.domElement);
       }
-      gridPlane.geometry.dispose();
-      if (gridPlane.material instanceof THREE.ShaderMaterial) {
-        gridPlane.material.dispose();
-      }
-      scene.remove(gridPlane);
+      disposeGrid(gridPlane);
       renderer.dispose();
     };
   }, [config]);
-  
-  const createGridPlane = (): THREE.Mesh => {
+
+  const createGridPlane = (config: typeof GridConfig, camera: THREE.Camera): THREE.Mesh => {
     const { size, subdivisions } = config.grid;
     const geometry = new THREE.PlaneGeometry(size, size, subdivisions, subdivisions);
-    geometry.rotateX(-Math.PI / 2); // horizontal
-    
+    geometry.rotateX(-Math.PI / 2);
+
     const material = new THREE.ShaderMaterial({
       uniforms: {
-        uTime: { value: 0.0 },
+        uTime: { value: 0 },
         uMousePosition: { value: new THREE.Vector2(0, 0) },
         uMouseRadius: { value: config.wave.mouseRadius },
         uMouseStrength: { value: config.wave.mouseStrength },
         uGridColor: { value: new THREE.Color(config.grid.color) },
         uBaseColor: { value: new THREE.Color(config.grid.baseColor) },
         uGridWidth: { value: config.grid.width },
-        uGridScale: { value: 1.0 }
+        uCameraPosition: { value: camera.position },
+        uFadeDistance: { value: config.grid.fadeDistance.end }
       },
       vertexShader: `
         uniform float uTime;
         uniform vec2 uMousePosition;
         uniform float uMouseRadius;
         uniform float uMouseStrength;
+        uniform vec3 uCameraPosition;
         
-        varying vec3 vPosition;
-        varying vec2 vUv;
+        varying vec3 vWorldPosition;
+        varying float vDistanceFromCamera;
         
-        // Simplex noise function
         ${getNoiseFunction()}
         
         void main() {
-          vUv = uv;
-          vPosition = position;
+          vWorldPosition = position;
           
-          // calculate distance to mouse position
-          vec2 mousePos = uMousePosition;
-          float distanceToMouse = distance(position.xz, mousePos);
+          // Calculate distance to mouse
+          float distanceToMouse = distance(position.xz, uMousePosition);
           
-          // wave deformation based on mouse position
+          // Wave deformation
           float deformation = 0.0;
           if (distanceToMouse < uMouseRadius) {
             float factor = 1.0 - distanceToMouse / uMouseRadius;
-            factor = smoothstep(0.0, 1.0, factor);
-            
             deformation = sin(factor * 10.0 - uTime * uMouseStrength) * factor * uMouseStrength;
           }
           
-          // shockwave
-          float globalWave = snoise(vec3(position.x * uMouseRadius * 0.01, position.z * uMouseRadius * 0.01, uTime * 0.2)) * uMouseStrength * 0.3;
+          // Global noise wave
+          float globalWave = snoise(vec3(position.xz * 0.1, uTime * 0.5)) * uMouseStrength * 0.3;
           
-          vec3 deformedPosition = position;
-          deformedPosition.y += deformation + globalWave * 0.5;
+          vec3 pos = position;
+          pos.y += deformation + globalWave;
           
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(deformedPosition, 1.0);
+          vDistanceFromCamera = distance(pos, uCameraPosition);
+          
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
         }
       `,
       fragmentShader: `
-        uniform float uTime;
         uniform vec3 uGridColor;
         uniform vec3 uBaseColor;
         uniform float uGridWidth;
-        uniform float uGridScale;
+        uniform float uFadeDistance;
         
-        varying vec3 vPosition;
-        varying vec2 vUv;
+        varying vec3 vWorldPosition;
+        varying float vDistanceFromCamera;
         
         float grid(vec2 coord, float lineWidth) {
           vec2 grid = abs(fract(coord - 0.5) - 0.5);
@@ -143,88 +125,72 @@ export default function GridComponent({ config = GridConfig }: GridComponentProp
         }
         
         void main() {
-          vec2 coord = vPosition.xz * uGridScale;
-          float lineWidth = 0.03 * uGridWidth;
+          // Grid pattern
+          vec2 coord = vWorldPosition.xz;
+          float gridPattern = grid(coord, uGridWidth * 0.03);
           
-          float distanceFromCenter = length(vPosition.xz);
-          float fadeOutFactor = smoothstep(40.0, 90.0, distanceFromCenter);
+          // Distance-based fading
+          float fade = 1.0 - smoothstep(uFadeDistance * 0.5, uFadeDistance, vDistanceFromCamera);
+          fade = pow(fade, 3.0);
           
-          float gridPattern = grid(coord, lineWidth);
-          
-          gridPattern = pow(gridPattern, 0.8);
-          
-          vec3 color = mix(uBaseColor, uGridColor, gridPattern);
-          
-          color = mix(color, uBaseColor, fadeOutFactor);
+          // Color mixing
+          vec3 color = mix(uBaseColor, uGridColor, gridPattern * fade);
           
           gl_FragColor = vec4(color, 1.0);
         }
       `,
       transparent: true,
-      side: THREE.DoubleSide
+      side: THREE.DoubleSide,
+      extensions: {
+        derivatives: true
+      } as any
     });
-    
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.position.set(0, 0, 0);
-    
-    console.log("Grid material:", material);
-    console.log("Grid mesh:", mesh);
-    
-    return mesh;
+
+    return new THREE.Mesh(geometry, material);
   };
-  
-  const setupMouseEvents = () => {
-    if (!containerRef.current) return;
-    
+
+  const setupMouseEvents = (container: HTMLElement, grid: THREE.Mesh) => {
     const onMouseMove = (event: MouseEvent) => {
-      const rect = containerRef.current!.getBoundingClientRect();
-      mousePosition.current.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-      mousePosition.current.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-      
-      updateMousePosition();
+      const rect = container.getBoundingClientRect();
+      mousePosition.current.set(
+        ((event.clientX - rect.left) / rect.width) * 2 - 1,
+        -((event.clientY - rect.top) / rect.height) * 2 + 1
+      );
+      updateMousePosition(grid);
     };
-    
-    //TODO : reset mouse position when mouse leaves the grid
-    const onMouseLeave = () => {
-      // Reset mouse position when mouse leaves the container
-      if (gridPlaneRef.current && gridPlaneRef.current.material instanceof THREE.ShaderMaterial) {
-        gridPlaneRef.current.material.uniforms.uMouseStrength.value = 0;
-      }
-    };
-    
-    const onMouseEnter = () => {
-      if (gridPlaneRef.current && gridPlaneRef.current.material instanceof THREE.ShaderMaterial) {
-        gridPlaneRef.current.material.uniforms.uMouseStrength.value = config.wave.mouseStrength;
-      }
-    };
-    
-    containerRef.current.addEventListener('mousemove', onMouseMove);
-    containerRef.current.addEventListener('mouseleave', onMouseLeave);
-    containerRef.current.addEventListener('mouseenter', onMouseEnter);
-    
-    return () => {
-      containerRef.current?.removeEventListener('mousemove', onMouseMove);
-      containerRef.current?.removeEventListener('mouseleave', onMouseLeave);
-      containerRef.current?.removeEventListener('mouseenter', onMouseEnter);
-    };
+
+    container.addEventListener('mousemove', onMouseMove);
+    return () => container.removeEventListener('mousemove', onMouseMove);
   };
-  
-  const updateMousePosition = () => {
-    if (!sceneContextRef.current || !gridPlaneRef.current) return;
+
+  const updateMousePosition = (grid: THREE.Mesh) => {
+    if (!sceneContextRef.current) return;
     
     const { camera } = sceneContextRef.current;
-    
     raycaster.current.setFromCamera(mousePosition.current, camera);
     
-    const intersects = raycaster.current.intersectObject(gridPlaneRef.current);
-    
-    if (intersects.length > 0 && 
-        gridPlaneRef.current.material instanceof THREE.ShaderMaterial) {
+    const intersects = raycaster.current.intersectObject(grid);
+    if (intersects.length > 0) {
       const point = intersects[0].point;
-      gridPlaneRef.current.material.uniforms.uMousePosition.value.set(point.x, point.z);
+      const material = grid.material as THREE.ShaderMaterial;
+      material.uniforms.uMousePosition.value.set(point.x, point.z);
     }
   };
-  
+
+  const updateGridMaterial = (grid: THREE.Mesh, time: number, camera: THREE.Camera) => {
+    const material = grid.material as THREE.ShaderMaterial;
+    material.uniforms.uTime.value = time;
+    material.uniforms.uCameraPosition.value.copy(camera.position);
+  };
+
+  const disposeGrid = (grid: THREE.Mesh) => {
+    grid.geometry.dispose();
+    if (grid.material instanceof THREE.ShaderMaterial) {
+      grid.material.dispose();
+    }
+    sceneContextRef.current?.scene.remove(grid);
+  };
+
   return (
     <div 
       ref={containerRef} 
